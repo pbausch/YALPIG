@@ -1,0 +1,231 @@
+<html>
+<head>
+	<title>YALPIG</title>
+	<style>
+		body {text-align:center;background:#aaa;}
+		#controls, #image {
+			text-align:left;
+			width: 50%;
+			margin: 0 auto;
+			padding: 10px;
+		}
+	</style>
+	<script>
+		var img_u8, img, corners, ctx, options, canvasWidth, canvasHeight;
+	
+		function retri() {
+			var canvas = document.getElementById('viewport')
+			context = canvas.getContext('2d');
+			context.clearRect ( 0 , 0 , canvas.width, canvas.height );
+
+			color = $("#color").prop('checked');
+			delaunay = $("#delaunay").prop('checked');
+			points = $("#points").prop('checked');
+			blur = parseFloat($("#blur").val());
+			lap = parseInt($("#lap").val());
+			eigen = parseInt($("#eigen").val());
+
+			triangulate(canvas,lap,eigen,blur,color,delaunay,points);
+		}
+			
+		var pxratio = ( window.devicePixelRatio && window.devicePixelRatio > 1 ) ? window.devicePixelRatio : 1;
+		
+		function triangulate(canvas,lap,eigen,blur,showcolor,showdulaunay,showpoints) {
+
+			canvas.width = img.width+100;
+			canvas.height = img.height+100;
+			// border
+			context.fillStyle="white";
+			context.rect(25, 25, img.width+50, img.height+50);
+			context.fill();
+			// image
+			context.drawImage(img, 50, 50, img.width, img.height);
+			
+			canvasWidth  = canvas.width;
+            canvasHeight = canvas.height;
+
+            ctx = canvas.getContext('2d');
+			ctx.strokeStyle="red";
+			
+            corners = [];
+            var i = canvasWidth*canvasHeight;
+            while(--i >= 0) {
+                corners[i] = new jsfeat.keypoint_t(0,0,0,0);
+            }
+
+			options = [];
+			options.lap_thres = lap;
+			options.eigen_thres = eigen;
+			
+			var imageData = ctx.getImageData(0, 0, canvasWidth, canvasHeight);
+			jsfeat.imgproc.grayscale(imageData.data, canvasWidth, canvasHeight, img_u8);
+			if (blur > 0) {
+				jsfeat.imgproc.box_blur_gray(img_u8, img_u8, blur, 0);
+			}
+			jsfeat.yape06.laplacian_threshold = options.lap_thres|0;
+            jsfeat.yape06.min_eigen_value_threshold = options.eigen_thres|0;
+			var count = jsfeat.yape06.detect(img_u8, corners);
+			var data_u32 = new Uint32Array(imageData.data.buffer);
+
+			var vertices = new Array(count);
+			for(var i=0; i < count; ++i) {
+				vertices[i] = [corners[i].x, corners[i].y];
+			}
+			
+			var polygons = Delaunay.triangulate(vertices);
+			var colorData = ctx.getImageData(0, 0, canvasWidth, canvasHeight);
+			
+			var triangles = [];
+			var tricount = 0, trianglecount = 0;
+			for(i = polygons.length; i; ) {
+				var triangle = [];
+				tricount++;
+		        --i; 
+				triangle.a = [vertices[polygons[i]][0], vertices[polygons[i]][1]];
+		        --i; 
+				triangle.b = [vertices[polygons[i]][0], vertices[polygons[i]][1]];
+		        --i; 
+				triangle.c = [vertices[polygons[i]][0], vertices[polygons[i]][1]];
+				triangles[trianglecount] = triangle;
+				if (tricount = 3) {
+					trianglecount++;
+					tricount = 0;
+				}
+	        }
+			
+			if (showpoints) {
+				render_corners(corners, count, data_u32, canvasWidth)
+				ctx.putImageData(imageData, 0, 0);
+			}
+			
+			if (showdulaunay) {
+				drawTriangles(ctx,triangles,1);
+			}
+			
+			if (showcolor) {
+				tri = getColorTriangles(triangles,colorData);
+				drawTriangles(ctx,tri,0);
+			}
+			
+			$("#viewport").show();
+			$("#controls").show();
+        }
+
+        function render_corners(corners, count, img, step) {
+            var pix = (0xff << 24) | (0x00 << 16) | (0xff << 8) | 0x00;
+            for(var i=0; i < count; ++i)
+            {
+                var x = corners[i].x;
+                var y = corners[i].y;
+                var off = (x + y * step);
+                img[off] = pix;
+                img[off-1] = pix;
+                img[off+1] = pix;
+                img[off-step] = pix;
+                img[off+step] = pix;
+            }
+        }
+
+		function drawTriangles(ctx,triangles,stroke) {
+			len = triangles.length;
+			context.lineWidth = 1;
+			for ( i = 0; i < len; i++ ) {
+				triangle = triangles[i];
+
+				ctx.beginPath();
+				ctx.moveTo( triangle.a[0] * pxratio, triangle.a[1] * pxratio );
+				ctx.lineTo( triangle.b[0] * pxratio, triangle.b[1] * pxratio );
+				ctx.lineTo( triangle.c[0] * pxratio, triangle.c[1] * pxratio );
+				ctx.lineTo( triangle.a[0] * pxratio, triangle.a[1] * pxratio );
+				if (stroke) {
+					ctx.stroke();
+				}
+				else {
+					ctx.fillStyle = triangle.color;
+					ctx.fill();
+				}
+				ctx.closePath();
+			}
+		}
+
+		function getColorTriangles( triangles, color_data ) {
+			len = triangles.length;
+			for ( i = 0; i < len; i++ )	{
+				triangle = triangles[i];
+
+				// triangle color = color at center of triangle
+				triangle_center_x = ( triangle.a[0] + triangle.b[0] + triangle.c[0] ) * 0.33333;
+				triangle_center_y = ( triangle.a[1] + triangle.b[1] + triangle.c[1] ) * 0.33333;
+
+				pixel = ( ( triangle_center_x | 0 ) + ( triangle_center_y | 0 ) * color_data.width ) << 2;
+
+				triangle.color = 'rgb(' + color_data.data[pixel] + ', ' + color_data.data[pixel + 1] + ', ' + color_data.data[pixel + 2] + ')';
+			}
+
+			return triangles;
+		}
+		
+		function set_img(src,init) {
+			var canvas = document.getElementById('viewport')
+			context = canvas.getContext('2d');
+			img = new Image();
+			img.crossOrigin="anonymous";
+			img.src = src;
+			img.onload = function() {
+				if (init) {
+					img_u8 = new jsfeat.matrix_t(canvasWidth, canvasHeight, jsfeat.U8_t | jsfeat.C1_t);
+					
+					// triangulate
+					//   arguments:
+					//     laplacian threshold
+					//     eigen value threshold
+					//     blur
+					//     show colorful triangles
+					//     show dulaunay triangles
+					//     show extracted points
+										
+					triangulate(canvas,30,25,0,1,0,0);
+				}
+			}
+		}
+	</script>
+</head>
+<body>
+	<canvas id="viewport" style="display:none;"></canvas>
+	<form id="controls" style="display:none;border:solid black 1px;" oninput="lapvalue.value=lap.value;eigenvalue.value=eigen.value">
+		<input id="color" type="checkbox" name="color" checked="checked" onchange="retri();"> color triangles
+		<br>
+		<input id="delaunay" type="checkbox" name="delaunay" onchange="retri();"> delaunay triangles
+		<br>
+		<input id="points" type="checkbox" name="points" onchange="retri();"> extracted points
+		<br>
+		<select id="blur" onchange="retri();">
+			<option value="0" checked="checked">default</option>
+			<option value=".5">.5</option>
+			<option value="1">1</option>
+			<option value="2">2</option>
+			<option value="3">3</option>
+			<option value="4">4</option>
+			<option value="5">5</option>
+			<option value="6">6</option>
+			<option value="7">7</option>
+			<option value="8">8</option>
+			<option value="9">9</option>
+			<option value="10">10</option>
+		</select> blur radius
+		<br>
+		<input id="lap" name="lap" type="range" min="0" max="100" value="30" onchange="retri();"> laplacian threshold (<output name="lapvalue" for="lap">30</output>)
+		<br>
+		<input id="eigen" name="eigen" type="range" min="0" max="100" value="25" onchange="retri();"> eigenvalue threshold (<output name="eigenvalue" for="eigen">25</output>)
+	</form>
+	
+	<script type="text/javascript" src="http://ajax.googleapis.com/ajax/libs/jquery/1.8.2/jquery.min.js"></script>
+	<script type="text/javascript" src="js/jsfeat-min.js"></script>
+	<script type="text/javascript" src="js/delaunay.js"></script>
+	
+	<script type="text/javascript">
+    $(window).load(function() {	set_img('https://dl.dropboxusercontent.com/u/58254183/10XVL.jpg',1);
+	});
+    </script>
+</body>
+</html>
